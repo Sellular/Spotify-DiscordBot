@@ -10,15 +10,6 @@ discordClient.on('ready', () => {
 });
 
 discordClient.on('message', async (message) => {
-    if (message.content === 'ping') message.reply('pong');
-    if (message.content === 'Gojira') {
-        let artist = await spotifyClient.artists.get('0GDGKpJFhVpcjIGF8N6Ewt');
-        let albumsPaging = await artist.getAlbums();
-        albumsPaging.items.forEach((album) => {
-            message.reply(album.href);
-        });
-    }
-
     if (message.content.includes('open.spotify.com')) {
         let messageParts = message.content.split(" ");
         let spotifyUrl = "";
