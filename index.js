@@ -1,16 +1,19 @@
 const Discord = require("discord.js");
 const Spotify = require("spotify-api.js");
-const config = require("./config.json");
+const mongoose = require('mongoose');
+const dotenv = require('dotenv');
 
 const spotifyClient = new Spotify.Client();
 const discordClient = new Discord.Client();
+
+dotenv.config();
 
 discordClient.on('ready', () => {
     console.log(`Logged in as ${discordClient.user.tag}`);
 });
 
 discordClient.on('message', async (message) => {
-    if (message.content.includes('open.spotify.com')) {
+        if (message.content.includes('open.spotify.com')) {
         let messageParts = message.content.split(" ");
         let spotifyUrl = "";
         messageParts.forEach((part) => {
@@ -53,5 +56,5 @@ spotifyClient.onReady = function() {
     console.log('Logged into Spotify successfully!');
 }
 
-discordClient.login(config.DISCORD_BOT_TOKEN);
-spotifyClient.login(config.SPOTIFY_ID, config.SPOTIFY_SECRET);
+discordClient.login(process.env.DISCORD_BOT_TOKEN);
+spotifyClient.login(process.env.SPOTIFY_ID, process.env.SPOTIFY_SECRET);
