@@ -56,5 +56,5 @@ spotifyClient.onReady = function() {
     console.log('Logged into Spotify successfully!');
 }
 
-discordClient.login(process.env.DISCORD_BOT_TOKEN);
+discordClient.login(process.env.DISCORD_TOKEN);
 spotifyClient.login(process.env.SPOTIFY_ID, process.env.SPOTIFY_SECRET);
