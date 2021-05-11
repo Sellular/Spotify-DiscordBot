@@ -6,11 +6,9 @@ const dotenv = require('dotenv');
 const spotifyClient = new Spotify.Client();
 const discordClient = new Discord.Client();
 
-dotenv.config();
+const ServerPlaylist = require('./model/ServerPlaylist');
 
-discordClient.on('ready', () => {
-    console.log(`Logged in as ${discordClient.user.tag}`);
-});
+dotenv.config();
 
 discordClient.on('message', async (message) => {
         if (message.content.includes('open.spotify.com')) {
@@ -52,9 +50,19 @@ discordClient.on('message', async (message) => {
     }
 });
 
+discordClient.on('ready', () => {
+    console.log(`Logged in as ${discordClient.user.tag}`);
+});
+
 spotifyClient.onReady = function() {
     console.log('Logged into Spotify successfully!');
 }
 
 discordClient.login(process.env.DISCORD_TOKEN);
 spotifyClient.login(process.env.SPOTIFY_ID, process.env.SPOTIFY_SECRET);
+mongoose.connect(process.env.DB_CONNECT,
+    {useNewUrlParser: true, useUnifiedTopology: true},
+    () => {
+        console.log("Connected to DB");
+    }
+);
