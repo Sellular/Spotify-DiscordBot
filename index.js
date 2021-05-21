@@ -65,7 +65,7 @@ const SpotifyPlaylist = require('./model/SpotifyPlaylist');
 const DiscordServer = require('./model/DiscordServer');
 
 discordClient.on('message', async (message) => {
-    if (message.content.includes('open.spotify.com/album') || message.content.includes('open.spotify.com/track') || message.content.includes('open.spotify.com/playlist')) {
+    if (message.content.includes('open.spotify.com/album') || message.content.includes('open.spotify.com/track') || message.content.includes('open.spotify.com/playlist') || message.content.includes('open.spotify.com/artist')) {
 
         let serverPlaylist = await ServerPlaylist.findOne({discordServerId: message.guild.id});
 
@@ -73,9 +73,10 @@ discordClient.on('message', async (message) => {
 
             let createdPlaylist = (await spotifyClient.createPlaylist(message.guild.name, { 
                 description: 'Conglomerate playlist for discord server: ' + message.guild.name,
-                public: true})).body;
+                public: true
+            })).body;
 
-            await SpotifyPlaylist.create({_id: createdPlaylist.id});
+            await SpotifyPlaylist.create({_id: createdPlaylist.id, songs: []});
             await DiscordServer.create({_id: message.guild.id});
 
             serverPlaylist = await ServerPlaylist.create({
@@ -100,21 +101,23 @@ discordClient.on('message', async (message) => {
 
         let requestId = requestData.split('?')[0];
 
+        let songsAdded = 0;
         switch(requestType) {
             case 'album': {
-                let album = (await spotifyClient.getAlbum(requestId)).body;
-                let songs = album.tracks.items;
+                let tracks = (await spotifyClient.getAlbumTracks(requestId)).body.items;
                 
                 let songUris = [];
-                songs.forEach((song) => {
-                    songUris.push(song.uri);
+                tracks.forEach((track) => {
+                    songUris.push(track.uri);
                 });
+                
+                songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
 
-                await spotifyClient.addTracksToPlaylist(serverPlaylist.spotifyPlaylistId, songUris);
             }; break;
             case 'track': {
                 let song = (await spotifyClient.getTrack(requestId)).body;
-                await spotifyClient.addTracksToPlaylist(serverPlaylist.spotifyPlaylistId, [song.uri]);
+
+                songsAdded = await insertPossibleSongs([song.uri], serverPlaylist.spotifyPlaylistId);
             }; break;
             case 'playlist': {
                 let playlist = (await spotifyClient.getPlaylist(requestId)).body;
@@ -125,15 +128,55 @@ discordClient.on('message', async (message) => {
                     songUris.push(item.track.uri);
                 });
 
-                await spotifyClient.addTracksToPlaylist(serverPlaylist.spotifyPlaylistId, songUris);
+                songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
             }; break;
+            case 'artist': {
+                let artistTopTracks = (await spotifyClient.getArtistTopTracks(requestId, 'US')).body.tracks;
+                
+                let songUris = [];
+                artistTopTracks.forEach((track) => {
+                    songUris.push(track.uri);
+                });
+
+                songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
+            } break;
+            default: return;
         }
 
-        let capitalStr = requestType.charAt(0).toUpperCase() + requestType.slice(1);
-
-        message.reply(capitalStr + " added to server playlist.");
+        message.reply(songsAdded + " songs added to the playlist");
     }
 });
+
+let insertPossibleSongs = async function(songUris, spotifyPlaylistId) {
+    let playlist = await SpotifyPlaylist.findById(spotifyPlaylistId);
+    
+    songUris = songsNotInPlaylist(songUris, playlist);
+
+    if (!songUris.length == 0) {
+        await spotifyClient.addTracksToPlaylist(spotifyPlaylistId, songUris);
+    
+        playlist.songs.push({
+            $each: songUris
+        });
+    
+        await playlist.save();
+    }
+       
+    return songUris.length;
+}
+
+let songsNotInPlaylist = function(songUris, playlist) {
+    const playlistSongs = playlist.songs;
+
+    let songsNotInPlaylist = [];
+    songUris.forEach((songUri) => {
+        if (!playlistSongs.includes(songUri)) {
+            songsNotInPlaylist.push(songUri);
+        }
+    });
+
+    return songsNotInPlaylist;
+};
 
 discordClient.on('ready', () => {
     console.log(`Logged in as ${discordClient.user.tag}`);
