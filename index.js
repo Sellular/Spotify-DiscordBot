@@ -2,6 +2,8 @@ const Discord = require("discord.js");
 const Spotify = require("spotify-web-api-node");
 const express = require('express');
 const mongoose = require('mongoose');
+const cron = require('node-cron');
+const request = require('request').defaults({encoding: null});
 require('dotenv').config();
 
 const discordClient = new Discord.Client();
@@ -17,7 +19,7 @@ const spotifyClient = new Spotify({
 spotifyClient.setRefreshToken(process.env.SPOTIFY_REFRESH_TOKEN);
 
 let interval;
-let intervalFunction = function() {
+const intervalFunction = function() {
     spotifyClient.refreshAccessToken().then((data) => {
         console.log('The access token has been refreshed!');
     
@@ -64,7 +66,12 @@ const ServerPlaylist = require('./model/ServerPlaylist');
 const SpotifyPlaylist = require('./model/SpotifyPlaylist');
 const DiscordServer = require('./model/DiscordServer');
 
+cron.schedule('0 0 * * *', () => {
+    expiredSongCheck();
+});
+
 discordClient.on('message', async (message) => {
+
     if (message.content.includes('open.spotify.com/album') || message.content.includes('open.spotify.com/track') || message.content.includes('open.spotify.com/playlist') || message.content.includes('open.spotify.com/artist')) {
 
         let serverPlaylist = await ServerPlaylist.findOne({discordServerId: message.guild.id});
@@ -76,6 +83,14 @@ discordClient.on('message', async (message) => {
                 public: true
             })).body;
 
+            // TODO: Get custom icon working
+            // if (message.guild.icon) {
+            //     request.get(message.guild.iconURL(), async (err, res, body) => {
+            //         console.log(body.toString('base64'));
+            //         await spotifyClient.uploadCustomPlaylistCoverImage(createdPlaylist.id, body.toString('base64'));
+            //     });
+            // }
+            
             await SpotifyPlaylist.create({_id: createdPlaylist.id, songs: []});
             await DiscordServer.create({_id: message.guild.id});
 
@@ -147,7 +162,7 @@ discordClient.on('message', async (message) => {
     }
 });
 
-let insertPossibleSongs = async function(songUris, spotifyPlaylistId) {
+const insertPossibleSongs = async function(songUris, spotifyPlaylistId) {
     let playlist = await SpotifyPlaylist.findById(spotifyPlaylistId);
     
     songUris = songsNotInPlaylist(songUris, playlist);
@@ -165,7 +180,7 @@ let insertPossibleSongs = async function(songUris, spotifyPlaylistId) {
     return songUris.length;
 }
 
-let songsNotInPlaylist = function(songUris, playlist) {
+const songsNotInPlaylist = function(songUris, playlist) {
     const playlistSongs = playlist.songs;
 
     let songsNotInPlaylist = [];
@@ -176,6 +191,45 @@ let songsNotInPlaylist = function(songUris, playlist) {
     });
 
     return songsNotInPlaylist;
+};
+
+const expiredSongCheck = async function() {
+    console.log('Starting Expiring Song Check');
+    console.time("expireSongs");
+
+    let allDBPlaylists = await SpotifyPlaylist.find({});
+
+    const now = new Date();
+    const monthAgo = new Date();
+    monthAgo.setDate(now.getDate() - 30);
+
+    await Promise.all(allDBPlaylists.map(async (playlist) => {
+        let spotifyPlaylist = (await spotifyClient.getPlaylist(playlist._id)).body;
+    
+        let tracks = spotifyPlaylist.tracks.items;
+
+        let removeUris = [];
+        tracks.forEach((track) => {
+            let trackDate = new Date(track.added_at);
+            if (trackDate <= monthAgo) {
+                removeUris.push({uri: track.track.uri});
+                console.log('Removing track: ' + track.track.uri + ' from playlist: ' + playlist._id);
+            }
+        });
+
+        if (removeUris.length > 0) {
+            await spotifyClient.removeTracksFromPlaylist(spotifyPlaylist.id, removeUris);
+
+            removeUris.forEach((trackUri) => {
+                playlist.songs.splice(playlist.songs.indexOf(trackUri), 1);
+            });
+
+            await playlist.save();
+        }
+
+    }));
+
+    console.timeEnd("expireSongs");
 };
 
 discordClient.on('ready', () => {
