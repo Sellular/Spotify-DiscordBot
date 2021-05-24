@@ -198,10 +198,11 @@ discordClient.on('message', async (message) => {
             default: return;
         }
 
-        let messageString = songsAdded + " songs added to the playlist.";
+        let messageString = songsAdded + " song" + (songsAdded === 1 ? "" : "s") + " added to the playlist.";
 
-        if(songsAdded !== numSongs) {
-            messageString = messageString + " " + numSongs + " songs were already in the playlist.";
+        let duplicateSongs = numSongs - songsAdded;        
+        if(duplicateSongs > 0) {
+            messageString = messageString + " " + duplicateSongs + " song" + (duplicateSongs === 1 ? "" : "s") + " " + (duplicateSongs === 1 ? "was" : "were") + " already in the playlist.";
         }
 
         message.reply(messageString);
