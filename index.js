@@ -4,6 +4,11 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
 const request = require('request').defaults({encoding: null});
+
+const ServerPlaylist = require('./model/ServerPlaylist');
+const SpotifyPlaylist = require('./model/SpotifyPlaylist');
+const DiscordServer = require('./model/DiscordServer');
+
 require('dotenv').config();
 
 const discordClient = new Discord.Client();
@@ -62,43 +67,69 @@ mongoose.connect(process.env.DB_CONNECT,
     }
 );
 
-const ServerPlaylist = require('./model/ServerPlaylist');
-const SpotifyPlaylist = require('./model/SpotifyPlaylist');
-const DiscordServer = require('./model/DiscordServer');
-
 cron.schedule('0 0 * * *', () => {
     expiredSongCheck();
 });
 
+const checkServerExists = async function(guild) {
+    let serverPlaylist = await ServerPlaylist.findOne({discordServerId: guild.id});
+
+    if (!serverPlaylist) {
+
+        let createdPlaylist = (await spotifyClient.createPlaylist(guild.name, { 
+            description: 'Conglomerate playlist for discord server: ' + guild.name,
+            public: true
+        })).body;
+
+        // TODO: Get custom icon working
+        // if (message.guild.icon) {
+        //     request.get(message.guild.iconURL(), async (err, res, body) => {
+        //         console.log(body.toString('base64'));
+        //         await spotifyClient.uploadCustomPlaylistCoverImage(createdPlaylist.id, body.toString('base64'));
+        //     });
+        // }
+        
+        await SpotifyPlaylist.create({_id: createdPlaylist.id, songs: []});
+        await DiscordServer.create({_id: guild.id});
+
+        serverPlaylist = await ServerPlaylist.create({
+            discordServerId: guild.id,
+            spotifyPlaylistId: createdPlaylist.id
+        });
+    }
+
+    let defaultChannel = '';
+    guild.channels.cache.forEach((channel) => {
+        if (channel.type == "text" && defaultChannel == '') {
+            if (channel.permissionsFor(guild.me).has("SEND_MESSAGES")) {
+                defaultChannel = channel;
+            }
+        }
+    });
+
+    defaultChannel.send("Hello, I am Spotify-Discord Bot. This server's spotify playlist is: https://open.spotify.com/playlist/" + serverPlaylist.spotifyPlaylistId);
+};
+
+discordClient.on('guildCreate', async (guild) => {
+    await checkServerExists(guild);
+});
+
+discordClient.on('guildDelete', async (guild) => {
+    let serverPlaylist = await ServerPlaylist.findOne({discordServerId: guild.id});
+
+    if (serverPlaylist) {
+
+        await ServerPlaylist.findByIdAndDelete(serverPlaylist._id);
+        await SpotifyPlaylist.findByIdAndDelete(serverPlaylist.spotifyPlaylistId);
+        await DiscordServer.findByIdAndDelete(serverPlaylist.discordServerId);
+    }
+});
+
 discordClient.on('message', async (message) => {
 
-    if (message.content.includes('open.spotify.com/album') || message.content.includes('open.spotify.com/track') || message.content.includes('open.spotify.com/playlist') || message.content.includes('open.spotify.com/artist')) {
+    if (message.author.id !== discordClient.user.id && (message.content.includes('open.spotify.com/album') || message.content.includes('open.spotify.com/track') || message.content.includes('open.spotify.com/playlist') || message.content.includes('open.spotify.com/artist'))) {
 
-        let serverPlaylist = await ServerPlaylist.findOne({discordServerId: message.guild.id});
-
-        if (!serverPlaylist) {
-
-            let createdPlaylist = (await spotifyClient.createPlaylist(message.guild.name, { 
-                description: 'Conglomerate playlist for discord server: ' + message.guild.name,
-                public: true
-            })).body;
-
-            // TODO: Get custom icon working
-            // if (message.guild.icon) {
-            //     request.get(message.guild.iconURL(), async (err, res, body) => {
-            //         console.log(body.toString('base64'));
-            //         await spotifyClient.uploadCustomPlaylistCoverImage(createdPlaylist.id, body.toString('base64'));
-            //     });
-            // }
-            
-            await SpotifyPlaylist.create({_id: createdPlaylist.id, songs: []});
-            await DiscordServer.create({_id: message.guild.id});
-
-            serverPlaylist = await ServerPlaylist.create({
-                discordServerId: message.guild.id,
-                spotifyPlaylistId: createdPlaylist.id
-            });
-        }
+        await checkServerExists(message.guild);
 
         let messageParts = message.content.split(" ");
         let spotifyUrl = "";
@@ -117,6 +148,7 @@ discordClient.on('message', async (message) => {
         let requestId = requestData.split('?')[0];
 
         let songsAdded = 0;
+        let numSongs = 1;
         switch(requestType) {
             case 'album': {
                 let tracks = (await spotifyClient.getAlbumTracks(requestId)).body.items;
@@ -125,6 +157,8 @@ discordClient.on('message', async (message) => {
                 tracks.forEach((track) => {
                     songUris.push(track.uri);
                 });
+
+                numSongs = songUris.length;
                 
                 songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
 
@@ -143,6 +177,8 @@ discordClient.on('message', async (message) => {
                     songUris.push(item.track.uri);
                 });
 
+                numSongs = songUris.length;
+
                 songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
             }; break;
             case 'artist': {
@@ -153,12 +189,20 @@ discordClient.on('message', async (message) => {
                     songUris.push(track.uri);
                 });
 
+                numSongs = songUris.length;
+
                 songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
             } break;
             default: return;
         }
 
-        message.reply(songsAdded + " songs added to the playlist");
+        let messageString = songsAdded + " songs added to the playlist.";
+
+        if(songsAdded !== numSongs) {
+            messageString = messageString + " " + numSongs + " songs were already in the playlist.";
+        }
+
+        message.reply(messageString);
     }
 });
 
