@@ -96,18 +96,20 @@ const checkServerExists = async function(guild) {
             discordServerId: guild.id,
             spotifyPlaylistId: createdPlaylist.id
         });
-    }
 
-    let defaultChannel = '';
-    guild.channels.cache.forEach((channel) => {
-        if (channel.type == "text" && defaultChannel == '') {
-            if (channel.permissionsFor(guild.me).has("SEND_MESSAGES")) {
-                defaultChannel = channel;
+        let defaultChannel = '';
+        guild.channels.cache.forEach((channel) => {
+            if (channel.type == "text" && defaultChannel == '') {
+                if (channel.permissionsFor(guild.me).has("SEND_MESSAGES")) {
+                    defaultChannel = channel;
+                }
             }
-        }
-    });
+        });
 
-    defaultChannel.send("Hello, I am Spotify-Discord Bot. This server's spotify playlist is: https://open.spotify.com/playlist/" + serverPlaylist.spotifyPlaylistId);
+        defaultChannel.send("Hello, I am Spotify-Discord Bot. This server's spotify playlist is: https://open.spotify.com/playlist/" + serverPlaylist.spotifyPlaylistId);
+    }
+    
+    return serverPlaylist;
 };
 
 discordClient.on('guildCreate', async (guild) => {
@@ -129,7 +131,7 @@ discordClient.on('message', async (message) => {
 
     if (message.author.id !== discordClient.user.id && (message.content.includes('open.spotify.com/album') || message.content.includes('open.spotify.com/track') || message.content.includes('open.spotify.com/playlist') || message.content.includes('open.spotify.com/artist'))) {
 
-        await checkServerExists(message.guild);
+        let serverPlaylist = await checkServerExists(message.guild);
 
         let messageParts = message.content.split(" ");
         let spotifyUrl = "";
