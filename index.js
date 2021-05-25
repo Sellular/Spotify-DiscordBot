@@ -129,84 +129,89 @@ discordClient.on('guildDelete', async (guild) => {
 
 discordClient.on('message', async (message) => {
 
-    if (message.author.id !== discordClient.user.id && (message.content.includes('open.spotify.com/album') || message.content.includes('open.spotify.com/track') || message.content.includes('open.spotify.com/playlist') || message.content.includes('open.spotify.com/artist'))) {
+    if (message.guild) {
+        if (message.author.id !== discordClient.user.id && (message.content.includes('open.spotify.com/album') || message.content.includes('open.spotify.com/track') || message.content.includes('open.spotify.com/playlist') || message.content.includes('open.spotify.com/artist'))) {
 
-        let serverPlaylist = await checkServerExists(message.guild);
-
-        let messageParts = message.content.split(" ");
-        let spotifyUrl = "";
-        messageParts.forEach((part) => {
-            if(part.includes("open.spotify.com")) {
-                spotifyUrl = part;
+            let serverPlaylist = await checkServerExists(message.guild);
+    
+            let messageParts = message.content.split(" ");
+            let spotifyUrl = "";
+            messageParts.forEach((part) => {
+                if(part.includes("open.spotify.com")) {
+                    spotifyUrl = part;
+                }
+            });
+    
+            let urlParts = spotifyUrl.split('/');
+            let typeIndex = urlParts.findIndex((part) => part.includes("open.spotify.com")) + 1;
+            
+            let requestType = urlParts[typeIndex];
+            let requestData = urlParts[typeIndex + 1];
+    
+            let requestId = requestData.split('?')[0];
+    
+            let songsAdded = 0;
+            let numSongs = 1;
+            switch(requestType) {
+                case 'album': {
+                    let tracks = (await spotifyClient.getAlbumTracks(requestId)).body.items;
+                    
+                    let songUris = [];
+                    tracks.forEach((track) => {
+                        songUris.push(track.uri);
+                    });
+    
+                    numSongs = songUris.length;
+                    
+                    songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
+    
+                }; break;
+                case 'track': {
+                    let song = (await spotifyClient.getTrack(requestId)).body;
+    
+                    songsAdded = await insertPossibleSongs([song.uri], serverPlaylist.spotifyPlaylistId);
+                }; break;
+                case 'playlist': {
+                    let playlist = (await spotifyClient.getPlaylist(requestId)).body;
+                    let playlistItems = playlist.tracks.items;
+    
+                    let songUris = [];
+                    playlistItems.forEach((item) => {
+                        songUris.push(item.track.uri);
+                    });
+    
+                    numSongs = songUris.length;
+    
+                    songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
+                }; break;
+                case 'artist': {
+                    let artistTopTracks = (await spotifyClient.getArtistTopTracks(requestId, 'US')).body.tracks;
+                    
+                    let songUris = [];
+                    artistTopTracks.forEach((track) => {
+                        songUris.push(track.uri);
+                    });
+    
+                    numSongs = songUris.length;
+    
+                    songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
+                } break;
+                default: return;
             }
-        });
-
-        let urlParts = spotifyUrl.split('/');
-        let typeIndex = urlParts.findIndex((part) => part.includes("open.spotify.com")) + 1;
-        
-        let requestType = urlParts[typeIndex];
-        let requestData = urlParts[typeIndex + 1];
-
-        let requestId = requestData.split('?')[0];
-
-        let songsAdded = 0;
-        let numSongs = 1;
-        switch(requestType) {
-            case 'album': {
-                let tracks = (await spotifyClient.getAlbumTracks(requestId)).body.items;
-                
-                let songUris = [];
-                tracks.forEach((track) => {
-                    songUris.push(track.uri);
-                });
-
-                numSongs = songUris.length;
-                
-                songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
-
-            }; break;
-            case 'track': {
-                let song = (await spotifyClient.getTrack(requestId)).body;
-
-                songsAdded = await insertPossibleSongs([song.uri], serverPlaylist.spotifyPlaylistId);
-            }; break;
-            case 'playlist': {
-                let playlist = (await spotifyClient.getPlaylist(requestId)).body;
-                let playlistItems = playlist.tracks.items;
-
-                let songUris = [];
-                playlistItems.forEach((item) => {
-                    songUris.push(item.track.uri);
-                });
-
-                numSongs = songUris.length;
-
-                songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
-            }; break;
-            case 'artist': {
-                let artistTopTracks = (await spotifyClient.getArtistTopTracks(requestId, 'US')).body.tracks;
-                
-                let songUris = [];
-                artistTopTracks.forEach((track) => {
-                    songUris.push(track.uri);
-                });
-
-                numSongs = songUris.length;
-
-                songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
-            } break;
-            default: return;
+    
+            let messageString = songsAdded + " song" + (songsAdded === 1 ? "" : "s") + " added to the playlist.";
+    
+            let duplicateSongs = numSongs - songsAdded;        
+            if(duplicateSongs > 0) {
+                messageString = messageString + " " + duplicateSongs + " song" + (duplicateSongs === 1 ? "" : "s") + " " + (duplicateSongs === 1 ? "was" : "were") + " already in the playlist.";
+            }
+    
+            message.reply(messageString);
         }
-
-        let messageString = songsAdded + " song" + (songsAdded === 1 ? "" : "s") + " added to the playlist.";
-
-        let duplicateSongs = numSongs - songsAdded;        
-        if(duplicateSongs > 0) {
-            messageString = messageString + " " + duplicateSongs + " song" + (duplicateSongs === 1 ? "" : "s") + " " + (duplicateSongs === 1 ? "was" : "were") + " already in the playlist.";
-        }
-
-        message.reply(messageString);
+    } else {
+        message.reply("This is not a discord server.");
     }
+
 });
 
 const insertPossibleSongs = async function(songUris, spotifyPlaylistId) {
