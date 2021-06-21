@@ -1,27 +1,42 @@
+'use strict';
+
 const Discord = require("discord.js");
 const Spotify = require("spotify-web-api-node");
 const express = require('express');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
+const fs = require('fs');
 const request = require('request').defaults({encoding: null});
 
 const ServerPlaylist = require('./model/ServerPlaylist');
 const SpotifyPlaylist = require('./model/SpotifyPlaylist');
 const DiscordServer = require('./model/DiscordServer');
 
+const DiscordSpotifyUtils = require('./utils/DiscordSpotifyUtils');
+const SpotifyUtilsConstructor = require('./utils/SpotifyUtils');
+const DiscordServerUtils = require("./dbUtils/DiscordServerUtils");
+
 require('dotenv').config();
 
 const discordClient = new Discord.Client();
 
-discordClient.login(process.env.DISCORD_TOKEN);
+const prefix = '!';
+
+discordClient.login(process.env.DISCORD_TOKEN).then(() => {
+    discordClient.commands = new Discord.Collection();
+    discordClient.modCommands = new Discord.Collection();
+
+    getDiscordCommands();
+});
 
 const spotifyClient = new Spotify({
     clientId: process.env.SPOTIFY_ID,
     clientSecret: process.env.SPOTIFY_SECRET,
-    redirectUri: process.env.SPOTIFY_REDIRECT
+    redirectUri: process.env.SPOTIFY_REDIRECT,
+    refreshToken: process.env.SPOTIFY_REFRESH_TOKEN
 });
 
-spotifyClient.setRefreshToken(process.env.SPOTIFY_REFRESH_TOKEN);
+const SpotifyUtils = new SpotifyUtilsConstructor(spotifyClient);
 
 let interval;
 const intervalFunction = function() {
@@ -71,49 +86,18 @@ cron.schedule('0 0 * * *', () => {
     expiredSongCheck();
 });
 
-const checkServerExists = async function(guild) {
+const checkPlaylistExists = async function(guild) {
     let serverPlaylist = await ServerPlaylist.findOne({discordServerId: guild.id});
 
     if (!serverPlaylist) {
-
-        let createdPlaylist = (await spotifyClient.createPlaylist(guild.name, { 
-            description: 'Conglomerate playlist for discord server: ' + guild.name,
-            public: true
-        })).body;
-
-        // TODO: Get custom icon working
-        // if (message.guild.icon) {
-        //     request.get(message.guild.iconURL(), async (err, res, body) => {
-        //         console.log(body.toString('base64'));
-        //         await spotifyClient.uploadCustomPlaylistCoverImage(createdPlaylist.id, body.toString('base64'));
-        //     });
-        // }
-        
-        await SpotifyPlaylist.create({_id: createdPlaylist.id, songs: []});
-        await DiscordServer.create({_id: guild.id});
-
-        serverPlaylist = await ServerPlaylist.create({
-            discordServerId: guild.id,
-            spotifyPlaylistId: createdPlaylist.id
-        });
-
-        let defaultChannel = '';
-        guild.channels.cache.forEach((channel) => {
-            if (channel.type == "text" && defaultChannel == '') {
-                if (channel.permissionsFor(guild.me).has("SEND_MESSAGES")) {
-                    defaultChannel = channel;
-                }
-            }
-        });
-
-        defaultChannel.send("Hello, I am Spotify-Discord Bot. This server's spotify playlist is: https://open.spotify.com/playlist/" + serverPlaylist.spotifyPlaylistId);
+        serverPlaylist = await DiscordSpotifyUtils.createServer(guild);
     }
     
     return serverPlaylist;
 };
 
 discordClient.on('guildCreate', async (guild) => {
-    await checkServerExists(guild);
+    await checkPlaylistExists(guild);
 });
 
 discordClient.on('guildDelete', async (guild) => {
@@ -130,120 +114,108 @@ discordClient.on('guildDelete', async (guild) => {
 discordClient.on('message', async (message) => {
 
     if (message.guild) {
-        if (message.author.id !== discordClient.user.id && (message.content.includes('open.spotify.com/album') || message.content.includes('open.spotify.com/track') || message.content.includes('open.spotify.com/playlist') || message.content.includes('open.spotify.com/artist'))) {
+        if (message.content.startsWith(prefix)) {
+            const args = message.content.slice(prefix.length).trim().split(/ +/);
+            const command = args.shift().toLowerCase();
 
-            let serverPlaylist = await checkServerExists(message.guild);
-    
-            let messageParts = message.content.split(" ");
-            let spotifyUrl = "";
-            messageParts.forEach((part) => {
-                if(part.includes("open.spotify.com")) {
-                    spotifyUrl = part;
-                }
-            });
-    
-            let urlParts = spotifyUrl.split('/');
-            let typeIndex = urlParts.findIndex((part) => part.includes("open.spotify.com")) + 1;
+            let commandObject;
             
-            let requestType = urlParts[typeIndex];
-            let requestData = urlParts[typeIndex + 1];
-    
-            let requestId = requestData.split('?')[0];
-    
-            let songsAdded = 0;
-            let numSongs = 1;
-            switch(requestType) {
-                case 'album': {
-                    let tracks = (await spotifyClient.getAlbumTracks(requestId)).body.items;
-                    
-                    let songUris = [];
-                    tracks.forEach((track) => {
-                        songUris.push(track.uri);
-                    });
-    
-                    numSongs = songUris.length;
-                    
-                    songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
-    
-                }; break;
-                case 'track': {
-                    let song = (await spotifyClient.getTrack(requestId)).body;
-    
-                    songsAdded = await insertPossibleSongs([song.uri], serverPlaylist.spotifyPlaylistId);
-                }; break;
-                case 'playlist': {
-                    let playlist = (await spotifyClient.getPlaylist(requestId)).body;
-                    let playlistItems = playlist.tracks.items;
-    
-                    let songUris = [];
-                    playlistItems.forEach((item) => {
-                        songUris.push(item.track.uri);
-                    });
-    
-                    numSongs = songUris.length;
-    
-                    songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
-                }; break;
-                case 'artist': {
-                    let artistTopTracks = (await spotifyClient.getArtistTopTracks(requestId, 'US')).body.tracks;
-                    
-                    let songUris = [];
-                    artistTopTracks.forEach((track) => {
-                        songUris.push(track.uri);
-                    });
-    
-                    numSongs = songUris.length;
-    
-                    songsAdded = await insertPossibleSongs(songUris, serverPlaylist.spotifyPlaylistId);
-                } break;
-                default: return;
+            if (discordClient.commands.has(command)) {
+                commandObject = discordClient.commands.get(command);
+            } else if (message.guild.ownerID === message.author.id) {
+                if (discordClient.modCommands.has(command)) {
+                    commandObject = discordClient.modCommands.get(command);
+                }
             }
-    
-            let messageString = songsAdded + " song" + (songsAdded === 1 ? "" : "s") + " added to the playlist.";
-    
-            let duplicateSongs = numSongs - songsAdded;        
-            if(duplicateSongs > 0) {
-                messageString = messageString + " " + duplicateSongs + " song" + (duplicateSongs === 1 ? "" : "s") + " " + (duplicateSongs === 1 ? "was" : "were") + " already in the playlist.";
+
+            if (commandObject) {
+                try {
+                    let commandArgs = {
+                        args: args
+                    };
+
+                    if (commandObject.isSpotify) commandArgs.spotifyUtils = SpotifyUtils;
+
+                    commandObject.execute(message, commandArgs);
+                } catch (error) {
+                    console.error(error);
+                    message.reply('There was an error trying to execute that command!');
+                }
             }
+        } else {
+            let serverPlaylist = await checkPlaylistExists(message.guild);
+
+            if (message.author.id !== discordClient.user.id && (message.content.includes('open.spotify.com/album') || message.content.includes('open.spotify.com/track') || message.content.includes('open.spotify.com/playlist') || message.content.includes('open.spotify.com/artist'))) {
     
-            message.reply(messageString);
+                let spotifyUrl = DiscordSpotifyUtils.parseSpotifyURLFromMessage(message);
+                let requestData = SpotifyUtils.parseLink(spotifyUrl);
+        
+                let songsAdded = 0;
+                let numSongs = 0;
+                switch(requestData.type) {
+                    case 'album': {
+                        let tracks = await SpotifyUtils.getAlbumTracksById(requestData.id);
+                        
+                        let songUris = [];
+                        tracks.forEach((track) => {
+                            songUris.push(track.uri);
+                        });
+        
+                        numSongs = songUris.length;
+                        
+                        songsAdded = await SpotifyUtils.insertSongsToPlaylist(songUris, serverPlaylist.spotifyPlaylistId);
+        
+                    }; break;
+                    case 'track': {
+                        let song = await SpotifyUtils.getSongById(requestData.id);
+        
+                        songsAdded = await SpotifyUtils.insertSongsToPlaylist([song.uri], serverPlaylist.spotifyPlaylistId);
+                    
+                        numSongs = 1;
+                    }; break;
+                    case 'playlist': {
+                        let playlist = await SpotifyUtils.getPlaylistById(requestData.id);
+                        let playlistItems = playlist.tracks.items;
+        
+                        let songUris = [];
+                        playlistItems.forEach((item) => {
+                            songUris.push(item.track.uri);
+                        });
+        
+                        numSongs = songUris.length;
+        
+                        songsAdded = await SpotifyUtils.insertSongsToPlaylist(songUris, serverPlaylist.spotifyPlaylistId);
+                    }; break;
+                    case 'artist': {
+                        let artistTopTracks = await SpotifyUtils.getArtistTopTracksById(requestData.id, 'US');
+                        
+                        let songUris = [];
+                        artistTopTracks.forEach((track) => {
+                            songUris.push(track.uri);
+                        });
+        
+                        numSongs = songUris.length;
+        
+                        songsAdded = await SpotifyUtils.insertSongsToPlaylist(songUris, serverPlaylist.spotifyPlaylistId);
+                    } break;
+                    default: return;
+                }
+        
+                let messageString = songsAdded + " song" + (songsAdded === 1 ? "" : "s") + " added to the playlist.";
+        
+                let duplicateSongs = numSongs - songsAdded;        
+                if(duplicateSongs > 0) {
+                    messageString = messageString + " " + duplicateSongs + " song" + (duplicateSongs === 1 ? "" : "s") + " " + (duplicateSongs === 1 ? "was" : "were") + " already in the playlist.";
+                }
+        
+                message.reply(messageString);
+            }
         }
     } else {
         message.reply("This is not a discord server.");
     }
 
 });
-
-const insertPossibleSongs = async function(songUris, spotifyPlaylistId) {
-    let playlist = await SpotifyPlaylist.findById(spotifyPlaylistId);
-    
-    songUris = songsNotInPlaylist(songUris, playlist);
-
-    if (!songUris.length == 0) {
-        await spotifyClient.addTracksToPlaylist(spotifyPlaylistId, songUris);
-    
-        playlist.songs.push({
-            $each: songUris
-        });
-    
-        await playlist.save();
-    }
-       
-    return songUris.length;
-}
-
-const songsNotInPlaylist = function(songUris, playlist) {
-    const playlistSongs = playlist.songs;
-
-    let songsNotInPlaylist = [];
-    songUris.forEach((songUri) => {
-        if (!playlistSongs.includes(songUri)) {
-            songsNotInPlaylist.push(songUri);
-        }
-    });
-
-    return songsNotInPlaylist;
-};
 
 const expiredSongCheck = async function() {
     console.log('Starting Expiring Song Check');
@@ -256,32 +228,26 @@ const expiredSongCheck = async function() {
     monthAgo.setDate(now.getDate() - 30);
 
     await Promise.all(allDBPlaylists.map(async (playlist) => {
-        let spotifyPlaylist = (await spotifyClient.getPlaylist(playlist._id)).body;
-    
-        let tracks = spotifyPlaylist.tracks.items;
-
-        let removeUris = [];
-        tracks.forEach((track) => {
-            let trackDate = new Date(track.added_at);
-            if (trackDate <= monthAgo) {
-                removeUris.push({uri: track.track.uri});
-                console.log('Removing track: ' + track.track.uri + ' from playlist: ' + playlist._id);
-            }
-        });
-
-        if (removeUris.length > 0) {
-            await spotifyClient.removeTracksFromPlaylist(spotifyPlaylist.id, removeUris);
-
-            removeUris.forEach((trackUri) => {
-                playlist.songs.splice(playlist.songs.indexOf(trackUri), 1);
-            });
-
-            await playlist.save();
-        }
-
+        await SpotifyUtils.removeExpiredSongsFromPlaylist(playlist._id, monthAgo);
     }));
 
     console.timeEnd("expireSongs");
+};
+
+const getDiscordCommands = function() {
+    const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
+    commandFiles.forEach((file) => {
+        let command = require(`./commands/${file}`);
+
+        discordClient.commands.set(command.name, command);
+    });
+
+    const modCommandFiles = fs.readdirSync('./modCommands').filter(file => file.endsWith('.js'));
+    modCommandFiles.forEach((file) => {
+        let modCommand = require(`./modCommands/${file}`);
+
+        discordClient.modCommands.set(modCommand.name, modCommand);
+    })
 };
 
 discordClient.on('ready', () => {
