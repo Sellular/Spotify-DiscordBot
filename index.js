@@ -122,7 +122,7 @@ discordClient.on('message', async (message) => {
             
             if (discordClient.commands.has(command)) {
                 commandObject = discordClient.commands.get(command);
-            } else if (message.guild.ownerID === message.author.id) {
+            } else if (message.guild.member(message.author).hasPermission("ADMINISTRATOR", "MANAGE_MESSAGES")) {
                 if (discordClient.modCommands.has(command)) {
                     commandObject = discordClient.modCommands.get(command);
                 }
