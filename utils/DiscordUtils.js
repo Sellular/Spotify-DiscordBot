@@ -11,7 +11,7 @@ const refreshRestCommands = async (commands, discordToken, discordId) => {
 
 		await rest.put(
 			Routes.applicationCommands(discordId),
-            // Routes.applicationGuildCommands(discordId, '839673797066096660'), // Testing server guild id
+            // Routes.applicationGuildCommands(discordId, 'id'), // Testing server guild id
             { body: commands }
         );
 
