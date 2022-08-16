@@ -1,35 +1,61 @@
-'use strict';
+const Spotify = require("spotify-web-api-node");
 
-const SpotifyPlaylistUtils = require('../dbUtils/SpotifyPlaylistUtils');
-const ServerPlaylistUtils = require('../dbUtils/ServerPlaylistUtils');
+require('dotenv').config({ path: '../.env' });
 
-module.exports = class SpotifyUtils {
+const getSpotifyClient = async () => {
 
-    #spotifyClient = null;
+    const spotifyClient = new Spotify({
+        clientId: process.env.SPOTIFY_ID,
+        clientSecret: process.env.SPOTIFY_SECRET,
+        redirectUri: process.env.SPOTIFY_REDIRECT,
+        refreshToken: process.env.SPOTIFY_REFRESH_TOKEN
+    });
 
-    constructor(spotifyClient) {
-        this.#spotifyClient = spotifyClient;
-    }
+    const data = await spotifyClient.refreshAccessToken();
+
+    spotifyClient.setAccessToken(data.body['access_token']);
+
+    return spotifyClient;
+}
+
+module.exports = {
 
     async getPlaylistById(playlistId) {
-        return (await this.#spotifyClient.getPlaylist(playlistId)).body;
-    }
+        const spotifyClient = await getSpotifyClient();
+        return (await spotifyClient.getPlaylist(playlistId)).body;
+    },
 
     async getSongById(songId) {
-        return (await this.#spotifyClient.getTrack(songId)).body;
-    }
+        const spotifyClient = await getSpotifyClient();
+        return (await spotifyClient.getTrack(songId)).body;
+    },
 
     async getAlbumTracksById(albumId) {
-        return (await this.#spotifyClient.getAlbumTracks(albumId)).body.items;
-    }
+        const spotifyClient = await getSpotifyClient();
+        return (await spotifyClient.getAlbumTracks(albumId)).body.items;
+    },
 
     async getArtistById(artistId) {
-        return (await this.#spotifyClient.getArtist(artistId)).body;
-    }
+        const spotifyClient = await getSpotifyClient();
+        return (await spotifyClient.getArtist(artistId)).body;
+    },
 
     async getArtistTopTracksById(artistId, region) {
-        return (await this.#spotifyClient.getArtistTopTracks(artistId, region)).body.tracks;
-    }
+        const spotifyClient = await getSpotifyClient();
+        return (await spotifyClient.getArtistTopTracks(artistId, region)).body.tracks;
+    },
+
+    parseSpotifyURLFromString(str) {
+        let strParts = str.split(" ");
+        let spotifyUrl = "";
+        strParts.forEach((part) => {
+            if(part.includes("open.spotify.com")) {
+                spotifyUrl = part;
+            }
+        });
+
+        return spotifyUrl;
+    },
 
     parseLink(spotifyUrl) {
         let urlParts = spotifyUrl.split('/');
@@ -44,129 +70,99 @@ module.exports = class SpotifyUtils {
             type: requestType,
             id: requestId
         };
-    }
+    },
 
-    songsNotInPlaylist(songUris, playlist) {
-        const playlistSongs = playlist.songs;
-    
-        let songsNotInPlaylist = [];
-        songUris.forEach((songUri) => {
-            if (!playlistSongs.includes(songUri)) {
-                songsNotInPlaylist.push(songUri);
-            }
-        });
-    
-        return songsNotInPlaylist;
-    }
+    async getSongsNotInPlaylist(playlistID, songUris) {
+        const spotifyClient = await getSpotifyClient();
+        const playlistTracks = (await spotifyClient.getPlaylistTracks(playlistID)).body.items;
+        
+        if (playlistTracks) {
+            const playlistURIs = playlistTracks.map((trackObject) => {
+                return trackObject.track.uri;
+            });
+
+            const missingURIs = [];
+            songUris.forEach((uri) => {
+                if (!playlistURIs.includes(uri)) {
+                    missingURIs.push(uri);
+                }
+            });
+
+            return missingURIs;
+        }
+    },
 
     async insertSongsToPlaylist(songUris, spotifyPlaylistId) {
-        let playlist = await SpotifyPlaylistUtils.getPlaylistById(spotifyPlaylistId);
+        const spotifyClient = await getSpotifyClient();
+
+        const missingURIs = await this.getSongsNotInPlaylist(spotifyPlaylistId, songUris);
     
-        songUris = this.songsNotInPlaylist(songUris, playlist);
-    
-        if (!songUris.length == 0) {
-            await this.#spotifyClient.addTracksToPlaylist(spotifyPlaylistId, songUris);
-        
-            playlist.songs.push({
-                $each: songUris
-            });
-        
-            await playlist.save();
+        if (missingURIs && missingURIs.length > 0) {
+            spotifyClient.addTracksToPlaylist(spotifyPlaylistId, missingURIs);
         }
            
-        return songUris.length;
-    }
+        return missingURIs.length;
+    },
 
-    async removeSongsFromPlaylist(songUris, playlistId) {
+    async __removeSongsFromPlaylist(songUris, playlistId) {
+        const spotifyClient = await getSpotifyClient();
         
         if (songUris.length > 0) {
-            let playlistObject = await SpotifyPlaylistUtils.getPlaylistById(playlistId);
-
-            await this.#spotifyClient.removeTracksFromPlaylist(playlistId, songUris);
-
-            songUris.forEach((trackUri) => {
-                playlistObject.songs.splice(playlistObject.songs.indexOf(trackUri), 1);
-            });
-
-            await playlistObject.save();
+            await spotifyClient.removeTracksFromPlaylist(playlistId, songUris);
         }
-    }
+    },
 
     async removeSongFromPlaylist(songId, playlistId) {
-        try {
-            const track = await this.getSongById(songId);
+        const track = await this.getSongById(songId);
 
-            await this.removeSongsFromPlaylist([{uri: track.uri}], playlistId);
-
-            return true;
-        } catch (error) {
-            return false;
-        }
-    }
+        await this.__removeSongsFromPlaylist([{uri: track.uri}], playlistId);
+    },
 
     async removeAlbumFromPlaylist(albumId, playlistId) {
-        try {
-            const albumTracks = await this.getAlbumTracksById(albumId);
+        const albumTracks = await this.getAlbumTracksById(albumId);
 
-            let removeURIs = [];
-            albumTracks.forEach((track) => {
-                removeURIs.push({uri: track.uri});
-            });
-    
-            await this.removeSongsFromPlaylist(removeURIs, playlistId);
-    
-            return true;
-        } catch (error) {
-            return false;
-        }
-    }
+        let removeURIs = [];
+        albumTracks.forEach((track) => {
+            removeURIs.push({uri: track.uri});
+        });
+
+        await this.__removeSongsFromPlaylist(removeURIs, playlistId);
+    },
 
     async removeArtistFromPlaylist(artistId, playlistId) {
-        try {
-            const playlist = await this.getPlaylistById(playlistId);
-            const tracks = playlist.tracks.items;
+        const playlist = await this.getPlaylistById(playlistId);
+        const tracks = playlist.tracks.items;
 
-            const removeTracks = tracks.filter((track) => {
-                const trackArtists = track.track.artists;
-                let hasArtist = false;
+        const removeTracks = tracks.filter((track) => {
+            const trackArtists = track.track.artists;
+            let hasArtist = false;
 
-                trackArtists.forEach((artist) => {
-                    if (artist.id == artistId) hasArtist = true;
-                });
-
-                return hasArtist;
+            trackArtists.forEach((artist) => {
+                if (artist.id == artistId) hasArtist = true;
             });
 
-            let removeURIs = [];
-            removeTracks.forEach((track) => {
-                removeURIs.push({uri: track.track.uri});
-            });
+            return hasArtist;
+        });
 
-            await this.removeSongsFromPlaylist(removeURIs, playlistId);
+        let removeURIs = [];
+        removeTracks.forEach((track) => {
+            removeURIs.push({uri: track.track.uri});
+        });
 
-            return true;
-        } catch (error) {
-            return false;
-        }
-    }
+        await this.__removeSongsFromPlaylist(removeURIs, playlistId);
+    },
 
     async removePlaylistFromPlaylist(removePlaylistId, playlistId) {
-        try {
-            const playlist = await this.getPlaylistById(removePlaylistId);
-            const tracks = playlist.tracks.items;
+        const playlist = await this.getPlaylistById(removePlaylistId);
+        const tracks = playlist.tracks.items;
 
-            let removeURIs = [];
-            tracks.forEach((track) => {
-                removeURIs.push({uri: track.track.uri});
-            });
+        let removeURIs = [];
+        tracks.forEach((track) => {
+            removeURIs.push({uri: track.track.uri});
+        });
 
-            await this.removeSongsFromPlaylist(removeURIs, playlistId);
-
-            return true;
-        } catch (error) {
-            return false;
-        }
-    }
+        await this.__removeSongsFromPlaylist(removeURIs, playlistId);
+    },
 
     async removeExpiredSongsFromPlaylist(playlistId, expiryDate) {
         let spotifyPlaylist = await this.getPlaylistById(playlistId);
@@ -182,11 +178,13 @@ module.exports = class SpotifyUtils {
             }
         });
 
-        await this.removeSongsFromPlaylist(removeUris, playlistId);
-    }
+        await this.__removeSongsFromPlaylist(removeUris, playlistId);
+    },
 
     async createPlaylist(guildName, isPublic) {
-        return (await this.#spotifyClient.createPlaylist(guildName, {
+        const spotifyClient = await getSpotifyClient();
+
+        return (await spotifyClient.createPlaylist(guildName, {
             description: 'Conglomerate playlist for discord server: ' + guildName,
             public: isPublic
         })).body;

@@ -1,0 +1,15 @@
+{
+	"extends": "eslint:recommended",
+	"env": {
+		"node": true,
+		"es6": true
+	},
+	"parserOptions": {
+        "sourceType": "module",
+        "allowImportExportEverywhere": true,
+		"ecmaVersion": 2021
+	},
+	"rules": {
+		"no-unused-vars": "off"
+	}
+}
