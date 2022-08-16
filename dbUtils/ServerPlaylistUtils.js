@@ -2,17 +2,17 @@ const ServerPlaylist = require('../model/ServerPlaylist');
 
 module.exports = {
 
-    async createServerPlaylist(discordId, spotifyId) {
+    async createServerPlaylist(guildId, spotifyId) {
         return (await ServerPlaylist.create({
-            discordServerId: discordId,
+            discordServerId: guildId,
             spotifyPlaylistId: spotifyId
         }));
     },
 
-    async getServerPlaylistByDiscordId(discordId) {
+    async getServerPlaylistByGuildId(guildId) {
         return (await ServerPlaylist.findOne({
-            discordServerId: discordId
+            discordServerId: guildId
         }));
     }
 
-};
+}
