@@ -3,7 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
 const fs = require('node:fs');
-const request = require('request').defaults({encoding: null});
+const request = require('request').defaults({ encoding: null });
 
 const ServerPlaylist = require('./model/ServerPlaylist');
 
@@ -12,12 +12,14 @@ const DiscordUtils = require('./utils/DiscordUtils');
 
 require('dotenv').config();
 
-const discordClient = new Client({ intents: [
-    GatewayIntentBits.Guilds, 
-    GatewayIntentBits.GuildMessages, 
-    GatewayIntentBits.GuildIntegrations,
-    GatewayIntentBits.MessageContent
-]});
+const discordClient = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildIntegrations,
+        GatewayIntentBits.MessageContent
+    ]
+});
 
 DiscordUtils.initializeEvents(discordClient);
 discordClient.login(process.env.DISCORD_TOKEN).then(() => {
@@ -41,22 +43,14 @@ discordClient.login(process.env.DISCORD_TOKEN).then(() => {
 //     'user-library-read'], 'user-read-playback-state')
 // );
 
-mongoose.connect(process.env.DB_CONNECT,
-    {},
-    (err) => {
-        if(err)
-            console.log(err);
-        else
-            console.log("Connected to DB");
-    }
-);
+mongoose.connect(process.env.DB_CONNECT);
 
 cron.schedule('0 0 * * *', () => {
     expiredSongCheck();
 });
 
 
-const expiredSongCheck = async function() {
+const expiredSongCheck = async function () {
     console.log('Starting Expiring Song Check');
     console.time("expireSongs");
 
